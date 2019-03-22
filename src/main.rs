@@ -102,7 +102,9 @@ fn read_args_cfg() -> Result<Cfg, String> {
 }
 
 fn format_usage(program: &str, opts: &Options) -> String {
-    let brief = format!("Usage: {} --prefix '<*#@!' --suffix '!@#*>' ", program);
+    let brief =
+        format!("Usage:\n    echo 'text #>hello<# text #>world<#' | \
+        {} --prefix '#>' --suffix '<#' ", program);
     opts.usage(&brief)
 }
 

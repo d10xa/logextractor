@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 getopts = "0.2.18"
+sha1 = "0.6.0"

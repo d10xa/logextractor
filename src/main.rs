@@ -1,4 +1,5 @@
 extern crate getopts;
+extern crate sha1;
 
 use std::env;
 use std::io::Read;
@@ -9,6 +10,8 @@ use std::str;
 
 use getopts::Options;
 use getopts::ParsingStyle;
+use std::path::Path;
+use std::fs::File;
 
 #[derive(Debug)]
 pub struct InnerTextIter<T: Read> {
@@ -85,7 +88,13 @@ fn inner_text_iterator_test() {
 }
 
 #[derive(Debug)]
-struct Cfg { prefix: String, suffix: String, delimiter: String, free: Vec<String> }
+struct Cfg {
+    prefix: String,
+    suffix: String,
+    delimiter: String,
+    free: Vec<String>,
+    output_dir: Option<String>
+}
 
 fn read_args_cfg() -> Result<Cfg, String> {
     let mut opts = Options::new();
@@ -94,6 +103,7 @@ fn read_args_cfg() -> Result<Cfg, String> {
     opts.reqopt("p", "prefix", "set prefix of text", "[PREFIX]");
     opts.reqopt("s", "suffix", "set suffix of text", "[SUFFIX]");
     opts.optopt("d", "delimiter", "stdout results delimiter", "[DELIMITER]");
+    opts.optopt("o", "output-dir", "save results to files", "[PATH]");
     opts.parsing_style(ParsingStyle::StopAtFirstFree);
     opts
         .parse(&args[1..])
@@ -101,7 +111,8 @@ fn read_args_cfg() -> Result<Cfg, String> {
             prefix: m.opt_str("prefix").unwrap(),
             suffix: m.opt_str("suffix").unwrap(),
             delimiter: m.opt_str("delimiter").unwrap_or("\n".to_string()),
-            free: m.free,
+            free: m.free.clone(),
+            output_dir: m.opt_str("output-dir")
         })
         .map_err(|e| format!("{}\n{}", format_usage(&program, &opts), e))
 }
@@ -153,13 +164,25 @@ fn run(cfg: Cfg) {
 }
 
 fn write_result(cfg: &Cfg, result: &[u8]) {
-    std::io::stdout()
-        .write(result)
-        .expect("stdout write error");
-    if !cfg.delimiter.is_empty() {
-        std::io::stdout().write(cfg.delimiter.as_bytes())
-            .expect("stdout write error");
-    };
+    match &cfg.output_dir {
+        Some(dir) => {
+            let file = Path::new(dir)
+                .join(format!("{}", sha1str(result)));
+            File::create(file)
+                .expect("error create file")
+                .write_all(result)
+                .expect("error write file");
+        }
+        None => {
+            std::io::stdout()
+                .write(result)
+                .expect("stdout write error");
+            if !cfg.delimiter.is_empty() {
+                std::io::stdout().write(cfg.delimiter.as_bytes())
+                    .expect("stdout write error");
+            };
+        }
+    }
 }
 
 fn run_process(args: &[String], stdin_bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -175,6 +198,12 @@ fn run_process(args: &[String], stdin_bytes: &[u8]) -> Result<Vec<u8>, String> {
     }
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     Ok(output.stdout)
+}
+
+fn sha1str(s: &[u8]) -> String {
+    let mut m = sha1::Sha1::new();
+    m.update(s);
+    m.digest().to_string()
 }
 
 #[derive(Debug)]

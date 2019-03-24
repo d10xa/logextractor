@@ -26,4 +26,6 @@ Options:
                         set suffix of text
     -d, --delimiter [DELIMITER]
                         stdout results delimiter
+    -o, --output-dir [PATH]
+                        save results to files
 ```

@@ -114,7 +114,7 @@ fn format_usage(program: &str, opts: &Options) -> String {
         Examples:\n    \
         echo 'text #>hello<# text #>world<#' | {program} --prefix '#>' --suffix '<#'\n    \
         echo '<(aGVsbG8K)><(d29ybGQK)>' | {program} -p '<(' -s ')>' -d ''  base64 --decode\
-        ", program=program);
+        ", program = program);
     opts.usage(&brief)
 }
 
@@ -142,18 +142,24 @@ fn run(cfg: Cfg) {
             let result = run_process(&cfg.free, &i);
             match result {
                 Ok(new_bytes) => {
-                    std::io::stdout().write(&new_bytes).expect("stdout write error");
+                    write_result(&cfg, &new_bytes);
                 }
                 Err(msg) => eprintln!("{}", msg)
             }
         } else {
-            std::io::stdout().write(&i).expect("stdout write error");
-        }
-        if !cfg.delimiter.is_empty() {
-            std::io::stdout().write(cfg.delimiter.as_bytes())
-                .expect("stdout write error");
+            write_result(&cfg, &i);
         }
     }
+}
+
+fn write_result(cfg: &Cfg, result: &[u8]) {
+    std::io::stdout()
+        .write(result)
+        .expect("stdout write error");
+    if !cfg.delimiter.is_empty() {
+        std::io::stdout().write(cfg.delimiter.as_bytes())
+            .expect("stdout write error");
+    };
 }
 
 fn run_process(args: &[String], stdin_bytes: &[u8]) -> Result<Vec<u8>, String> {

@@ -5,7 +5,7 @@ Extract !@%& WRAPPED &%@! content from stdin!
 ## Install
 
 ```
-cargo install --git https://github.com/d10xa/logextractor.git
+cargo install --git https://github.com/d10xa/logextractor.git --force
 ```
 
 ## Usage

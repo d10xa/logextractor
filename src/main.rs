@@ -3,9 +3,12 @@ extern crate getopts;
 use std::env;
 use std::io::Read;
 use std::io::Write;
+use std::process::Command;
+use std::process::Stdio;
 use std::str;
 
 use getopts::Options;
+use getopts::ParsingStyle;
 
 #[derive(Debug)]
 pub struct InnerTextIter<T: Read> {
@@ -82,29 +85,36 @@ fn inner_text_iterator_test() {
 }
 
 #[derive(Debug)]
-struct Cfg { prefix: String, suffix: String, delimiter: String }
+struct Cfg { prefix: String, suffix: String, delimiter: String, free: Vec<String> }
 
 fn read_args_cfg() -> Result<Cfg, String> {
     let mut opts = Options::new();
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
-    opts.reqopt("", "prefix", "set prefix of text", "[prefix]");
-    opts.reqopt("", "suffix", "set suffix of text", "[suffix]");
-    opts.optopt("", "delimiter", "stdout results delimiter", "[delimiter]");
+    opts.reqopt("p", "prefix", "set prefix of text", "[PREFIX]");
+    opts.reqopt("s", "suffix", "set suffix of text", "[SUFFIX]");
+    opts.optopt("d", "delimiter", "stdout results delimiter", "[DELIMITER]");
+    opts.parsing_style(ParsingStyle::StopAtFirstFree);
     opts
         .parse(&args[1..])
         .map(|m| Cfg {
             prefix: m.opt_str("prefix").unwrap(),
             suffix: m.opt_str("suffix").unwrap(),
-            delimiter: m.opt_str("delimiter").unwrap_or("\n".to_string())
+            delimiter: m.opt_str("delimiter").unwrap_or("\n".to_string()),
+            free: m.free,
         })
         .map_err(|e| format!("{}\n{}", format_usage(&program, &opts), e))
 }
 
 fn format_usage(program: &str, opts: &Options) -> String {
     let brief =
-        format!("Usage:\n    echo 'text #>hello<# text #>world<#' | \
-        {} --prefix '#>' --suffix '<#' ", program);
+        format!("\
+        Usage:\n    \
+        {program} -p <PREFIX> -s <SUFFIX> [-d DELIMITER] [COMMAND]\n\n\
+        Examples:\n    \
+        echo 'text #>hello<# text #>world<#' | {program} --prefix '#>' --suffix '<#'\n    \
+        echo '<(aGVsbG8K)><(d29ybGQK)>' | {program} -p '<(' -s ')>' -d ''  base64 --decode\
+        ", program=program);
     opts.usage(&brief)
 }
 
@@ -117,7 +127,6 @@ fn main() {
             eprintln!("{}", msg);
         }
     }
-
 }
 
 fn run(cfg: Cfg) {
@@ -125,12 +134,21 @@ fn run(cfg: Cfg) {
         InnerTextIter::new(
             std::io::stdin(),
             cfg.prefix.as_bytes().to_vec(),
-            cfg.suffix.as_bytes().to_vec()
+            cfg.suffix.as_bytes().to_vec(),
         );
 
     for i in text {
-        std::io::stdout().write(&i)
-            .expect("stdout write error");
+        if !cfg.free.is_empty() {
+            let result = run_process(&cfg.free, &i);
+            match result {
+                Ok(new_bytes) => {
+                    std::io::stdout().write(&new_bytes).expect("stdout write error");
+                }
+                Err(msg) => eprintln!("{}", msg)
+            }
+        } else {
+            std::io::stdout().write(&i).expect("stdout write error");
+        }
         if !cfg.delimiter.is_empty() {
             std::io::stdout().write(cfg.delimiter.as_bytes())
                 .expect("stdout write error");
@@ -138,8 +156,23 @@ fn run(cfg: Cfg) {
     }
 }
 
+fn run_process(args: &[String], stdin_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut child = Command::new(args.first().expect("arguments empty"))
+        .args(&args[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    {
+        let stdin = child.stdin.as_mut();
+        stdin.unwrap().write_all(stdin_bytes).map_err(|e| e.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok(output.stdout)
+}
+
 #[derive(Debug)]
-struct  SequenceFinder {
+struct SequenceFinder {
     seq: Vec<u8>,
     count: usize,
 }

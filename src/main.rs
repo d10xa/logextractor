@@ -1,5 +1,6 @@
 extern crate getopts;
 extern crate sha1;
+extern crate tempfile;
 
 use std::env;
 use std::io::Read;
@@ -93,7 +94,7 @@ struct Cfg {
     suffix: String,
     delimiter: String,
     free: Vec<String>,
-    output_dir: Option<String>
+    output_dir: Option<String>,
 }
 
 fn read_args_cfg() -> Result<Cfg, String> {
@@ -112,7 +113,7 @@ fn read_args_cfg() -> Result<Cfg, String> {
             suffix: m.opt_str("suffix").unwrap(),
             delimiter: m.opt_str("delimiter").unwrap_or("\n".to_string()),
             free: m.free.clone(),
-            output_dir: m.opt_str("output-dir")
+            output_dir: m.opt_str("output-dir"),
         })
         .map_err(|e| format!("{}\n{}", format_usage(&program, &opts), e))
 }
@@ -186,16 +187,18 @@ fn write_result(cfg: &Cfg, result: &[u8]) {
 }
 
 fn run_process(args: &[String], stdin_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let mut child = Command::new(args.first().expect("arguments empty"))
+    let mut stdin_file = tempfile::tempfile().expect("tempfile()");
+    stdin_file.write_all(stdin_bytes).expect("error write temp file");
+    {
+        use std::io::{Seek, SeekFrom};
+        stdin_file.seek(SeekFrom::Start(0)).expect("error unwrap seek");
+    }
+    let child = Command::new(args.first().expect("arguments empty"))
         .args(&args[1..])
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(stdin_file))
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
-    {
-        let stdin = child.stdin.as_mut();
-        stdin.unwrap().write_all(stdin_bytes).map_err(|e| e.to_string())?;
-    }
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     Ok(output.stdout)
 }

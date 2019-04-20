@@ -2,17 +2,21 @@ extern crate getopts;
 extern crate sha1;
 extern crate tempfile;
 
+use std::collections::HashSet;
 use std::env;
+use std::fs::File;
+use std::io;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
 use std::str;
 
 use getopts::Options;
 use getopts::ParsingStyle;
-use std::path::Path;
-use std::fs::File;
+use regex::Captures;
+use regex::Regex;
 
 #[derive(Debug)]
 pub struct InnerTextIter<T: Read> {
@@ -24,6 +28,9 @@ pub struct InnerTextIter<T: Read> {
     suffix_finder: SequenceFinder,
     read_index: usize,
 }
+
+#[derive(Hash, Eq, PartialEq)]
+pub struct ShaString(String);
 
 impl<R: Read> InnerTextIter<R> {
     pub fn new(source: R, prefix: Vec<u8>, suffix: Vec<u8>) -> InnerTextIter<R> {
@@ -95,16 +102,19 @@ struct Cfg {
     delimiter: String,
     free: Vec<String>,
     output_dir: Option<String>,
+    enumerate_files: bool,
+    unique: bool,
 }
 
-fn read_args_cfg() -> Result<Cfg, String> {
+fn read_args_cfg(args: &Vec<String>) -> Result<Cfg, String> {
     let mut opts = Options::new();
-    let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     opts.reqopt("p", "prefix", "set prefix of text", "[PREFIX]");
     opts.reqopt("s", "suffix", "set suffix of text", "[SUFFIX]");
     opts.optopt("d", "delimiter", "stdout results delimiter", "[DELIMITER]");
     opts.optopt("o", "output-dir", "save results to files", "[PATH]");
+    opts.optflag("e", "enumerate-files", "enumerate output files");
+    opts.optflag("u", "unique", "do not make duplicates");
     opts.parsing_style(ParsingStyle::StopAtFirstFree);
     opts
         .parse(&args[1..])
@@ -114,8 +124,36 @@ fn read_args_cfg() -> Result<Cfg, String> {
             delimiter: m.opt_str("delimiter").unwrap_or("\n".to_string()),
             free: m.free.clone(),
             output_dir: m.opt_str("output-dir"),
+            enumerate_files: m.opt_present("enumerate-files"),
+            unique: m.opt_present("unique"),
         })
         .map_err(|e| format!("{}\n{}", format_usage(&program, &opts), e))
+}
+
+#[test]
+fn test_read_args_cfg() {
+    let args =
+        vec!["app", "-p", "<", "-s", ">", "-d", ",", "-o", ".", "-e", "-u"]
+            .iter().map(|s| s.to_string()).collect();
+    let cfg = read_args_cfg(&args).unwrap();
+    assert_eq!("<", cfg.prefix);
+    assert_eq!(">", cfg.suffix);
+    assert_eq!(",", cfg.delimiter);
+    assert_eq!(".", cfg.output_dir.unwrap());
+    assert_eq!(true, cfg.enumerate_files);
+    assert_eq!(true, cfg.unique);
+}
+
+#[test]
+fn test_read_args_cfg_defaults() {
+    let args =
+        vec!["app", "-p", "<", "-s", ">"]
+            .iter().map(|s| s.to_string()).collect();
+    let cfg = read_args_cfg(&args).unwrap();
+    assert_eq!("\n", cfg.delimiter);
+    assert_eq!(None, cfg.output_dir);
+    assert_eq!(false, cfg.enumerate_files);
+    assert_eq!(false, cfg.unique);
 }
 
 fn format_usage(program: &str, opts: &Options) -> String {
@@ -131,7 +169,7 @@ fn format_usage(program: &str, opts: &Options) -> String {
 }
 
 fn main() {
-    match read_args_cfg() {
+    match read_args_cfg(&env::args().collect()) {
         Ok(cfg) => {
             run(cfg);
         }
@@ -149,26 +187,71 @@ fn run(cfg: Cfg) {
             cfg.suffix.as_bytes().to_vec(),
         );
 
+    let option_filenames = match &cfg.output_dir {
+        Some(dir) => {
+            read_filenames(Path::new(&dir)).ok()
+        }
+        None => {
+            None
+        }
+    };
+
+    let mut counter: u64 = match (cfg.enumerate_files, &option_filenames) {
+        (true, Some(filenames)) => {
+            let max = extract_max_index_number(&filenames);
+            max + 1
+        }
+        _ => 1
+    };
+
+    let mut hashes = match option_filenames {
+        Some(filenames) => {
+            extract_sha1_from_file_names(&filenames)
+        }
+        None => {
+            HashSet::new()
+        }
+    };
+
     for i in text {
-        if !cfg.free.is_empty() {
+        let bytes_to_write: Result<Vec<u8>, String> = if !cfg.free.is_empty() {
             let result = run_process(&cfg.free, &i);
-            match result {
-                Ok(new_bytes) => {
-                    write_result(&cfg, &new_bytes);
-                }
-                Err(msg) => eprintln!("{}", msg)
-            }
+            result
         } else {
-            write_result(&cfg, &i);
+            Ok(i)
+        };
+        match bytes_to_write {
+            Ok(b) => {
+                let sha = ShaString(sha1str(&b));
+                let unique_pass = !cfg.unique || !hashes.contains(&sha);
+                if unique_pass {
+                    write_result(&cfg, &b, &sha, &counter);
+                    counter += 1;
+                }
+                if cfg.unique {
+                    hashes.insert(sha);
+                }
+            }
+            Err(msg) => {
+                eprintln!("{}", msg)
+            }
         }
     }
 }
 
-fn write_result(cfg: &Cfg, result: &[u8]) {
+fn write_result(cfg: &Cfg, result: &[u8], sha: &ShaString, counter: &u64) {
     match &cfg.output_dir {
         Some(dir) => {
+            let filename = match cfg.enumerate_files {
+                true => {
+                    format!("{}_{}", counter, sha.0)
+                }
+                false => {
+                    format!("{}", sha.0)
+                }
+            };
             let file = Path::new(dir)
-                .join(format!("{}", sha1str(result)));
+                .join(filename);
             File::create(file)
                 .expect("error create file")
                 .write_all(result)
@@ -209,8 +292,63 @@ fn sha1str(s: &[u8]) -> String {
     m.digest().to_string()
 }
 
+fn extract_sha1_from_file_names(filenames: &Vec<String>) -> HashSet<ShaString> {
+    fn extract_option_sha1(c: Captures) -> Option<String> {
+        c.get(0).map(|v| v.as_str().to_string())
+    }
+    let re = Regex::new(r"[0-9a-f]{40}").unwrap();
+    let set: HashSet<ShaString> = filenames.iter()
+        .flat_map(|f| re.captures(f))
+        .flat_map(extract_option_sha1)
+        .map(ShaString)
+        .collect();
+    set
+}
+
+#[test]
+fn test_extract_sha1_from_file_names() {
+    let names: Vec<String> = vec![
+        "42_34973274ccef6ab4dfaaf86599792fa9c3fe4689_____.txt", // valid
+        "2_7448d8798a4380162d4b56f9b452e2f6f9e24e7a", // valid
+        "a3db5c13ff90a36963278c6a39e4ee3c22e2a436aaaaaaaaaaaaaaaaaaaaaaaaaa", // valid
+        "9c6b057a2b9d96a4067a749ee3b3b0158d390cfx", // last symbol is x
+        "9c6b057a2b9d96a4067a749ee3b3b0158d390cf", // last symbol is absent
+    ].iter().map(|s| s.to_string()).collect();
+
+    let names = extract_sha1_from_file_names(&names);
+    assert_eq!(3, names.len());
+}
+
+fn extract_max_index_number(filenames: &Vec<String>) -> u64 {
+    filenames.iter().flat_map(|f| {
+        let split: Vec<&str> = f.splitn(2, "_").collect();
+        if split.len() > 0 {
+            split[0].parse::<u64>().ok()
+        } else { None }
+    }).max().unwrap_or(0)
+}
+
+#[test]
+fn test_extract_max_index_number() {
+    let names: Vec<String> = vec![
+        "e5fa44f2b31c1fb553b6021e7360d07d5d91ff5e_x",
+        "42_34973274ccef6ab4dfaaf86599792fa9c3fe4689_____.txt",
+        "2_7448d8798a4380162d4b56f9b452e2f6f9e24e7a",
+    ].iter().map(|s| s.to_string()).collect();
+
+    let max =
+        extract_max_index_number(&names);
+    assert_eq!(42, max);
+}
+
+fn read_filenames(p: &Path) -> io::Result<Vec<String>> {
+    Ok(p.read_dir()?
+        .map(|f| f.unwrap().file_name().to_string_lossy().to_string())
+        .collect())
+}
+
 #[derive(Debug)]
-struct SequenceFinder {
+pub struct SequenceFinder {
     seq: Vec<u8>,
     count: usize,
 }

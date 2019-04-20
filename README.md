@@ -28,4 +28,7 @@ Options:
                         stdout results delimiter
     -o, --output-dir [PATH]
                         save results to files
+    -e, --enumerate-files 
+                        enumerate output files
+    -u, --unique        do not make duplicates
 ```
